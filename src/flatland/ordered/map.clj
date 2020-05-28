@@ -1,11 +1,9 @@
 (ns flatland.ordered.map
-  (:use [flatland.ordered.common :only [change! Compactable compact]]
-        [flatland.ordered.set :only [ordered-set]]
-        [flatland.useful.experimental.delegate :only [delegating-deftype]])
+  (:require [flatland.ordered.common :refer [change! Compactable compact]]
+            [flatland.ordered.set :refer [ordered-set]])
   (:require [clojure.string :as s])
   (:import (clojure.lang APersistentMap
                          IPersistentMap
-                         IPersistentCollection
                          IPersistentVector
                          IEditableCollection
                          ITransientMap
@@ -13,7 +11,6 @@
                          IHashEq
                          IObj
                          IFn
-                         Seqable
                          MapEquivalence
                          Reversible
                          MapEntry
@@ -22,28 +19,16 @@
                          )
            (java.util Map Map$Entry)))
 
-;; We could use compile-if technique here, but hoping to avoid
-;; an AOT issue using this way instead.
-(def hasheq-ordered-map
-  (or (resolve 'clojure.core/hash-unordered-coll)
-      (fn old-hasheq-ordered-map [^Seqable m]
-        (reduce (fn [acc ^MapEntry e]
-                  (let [k (.key e), v (.val e)]
-                    (unchecked-add ^Integer acc ^Integer (bit-xor (hash k) (hash v)))))
-                0 (.seq m)))))
+(set! *warn-on-reflection* true)
 
 (defn entry [k v i]
   (MapEntry. k (MapEntry. i v)))
 
 (declare transient-ordered-map)
 
-(delegating-deftype OrderedMap [^IPersistentMap backing-map
-                                ^IPersistentVector order]
-  {backing-map {IPersistentMap [(count [])]
-                Map [(size [])
-                     (containsKey [k])
-                     (isEmpty [])
-                     (keySet [])]}}
+(deftype OrderedMap [^IPersistentMap backing-map
+                     ^IPersistentVector order]
+
   ;; tagging interfaces
   MapEquivalence
 
@@ -66,33 +51,8 @@
     (if-let [^MapEntry e (.get ^Map backing-map k)]
       (.val e)
       not-found))
-
-  IFn
-  (invoke [this k]
-    (.valAt this k))
-  (invoke [this k not-found]
-    (.valAt this k not-found))
-
-  Map
-  (get [this k]
-    (.valAt this k))
-  (containsValue [this v]
-    (boolean (seq (filter #(= % v) (.values this)))))
-  (values [this]
-    (map (comp val val) (.seq this)))
-
-  Object
-  (toString [this]
-    (str "{" (s/join ", " (for [[k v] this] (str k " " v))) "}"))
-  (equals [this other]
-    (.equiv this other))
-  (hashCode [this]
-    (APersistentMap/mapHash this))
-  IHashEq
-  (hasheq [this]
-    (hasheq-ordered-map this))
-
-  IPersistentMap
+  (count [this]
+    (.count backing-map))
   (empty [this]
     (OrderedMap. (-> {} (with-meta (meta backing-map))) []))
   (cons [this obj]
@@ -132,6 +92,39 @@
     ;; because rich won't let us inherit from AbstractSet
     (apply ordered-set this))
 
+  IFn
+  (invoke [this k]
+    (.valAt this k))
+  (invoke [this k not-found]
+    (.valAt this k not-found))
+
+  Map
+  (size [this]
+    (.size ^Map backing-map))
+  (containsKey [this k]
+    (.containsKey backing-map k))
+  (isEmpty [this]
+    (.isEmpty ^Map backing-map))
+  (keySet [this]
+    (.keySet ^Map backing-map))
+  (get [this k]
+    (.valAt this k))
+  (containsValue [this v]
+    (boolean (seq (filter #(= % v) (.values this)))))
+  (values [this]
+    (map (comp val val) (.seq this)))
+
+  Object
+  (toString [this]
+    (str "{" (s/join ", " (for [[k v] this] (str k " " v))) "}"))
+  (equals [this other]
+    (.equiv this other))
+  (hashCode [this]
+    (APersistentMap/mapHash this))
+  IHashEq
+  (hasheq [this]
+    (hash-unordered-coll this))
+
   IObj
   (meta [this]
     (.meta ^IObj backing-map))
@@ -170,10 +163,11 @@ assoc'ed for the first time. Supports transient."
 ;; instead, we pass `this` as the not-found argument and hope nobody makes a
 ;; transient contain itself.
 
-(delegating-deftype TransientOrderedMap [^{:unsynchronized-mutable true, :tag ITransientMap} backing-map,
-                                         ^{:unsynchronized-mutable true, :tag ITransientVector} order]
-  {backing-map {ITransientMap [(count [])]}}
+(deftype TransientOrderedMap [^{:unsynchronized-mutable true, :tag ITransientMap} backing-map,
+                              ^{:unsynchronized-mutable true, :tag ITransientVector} order]
   ITransientMap
+  (count [this]
+    (. backing-map (count)))
   (valAt [this k]
     (.valAt this k nil))
   (valAt [this k not-found]
